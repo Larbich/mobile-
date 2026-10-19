@@ -11,8 +11,8 @@
 import { Colors } from '@/constants/colors';
 import { SIDE_CHATS } from '@/constants/dummyData';
 import { showToast } from '@/context/ToastContext';
-import { supabase } from '@/lib/supabase';
 import { CreateNewThread, DeleteThread, GetAllUserThreads } from '@/services/chatHistory';
+import { loadLocalProfile } from '@/services/providerStorage';
 import { SideChatItem } from '@/types';
 import {
   ArrowRight01Icon,
@@ -82,9 +82,8 @@ export const SidebarDrawer: React.FC<SidebarDrawerProps> = ({
 
   useEffect(() => {
     const loadUser = async () => {
-      const data = await supabase.auth.getSession();
-      const userEmail = data?.data?.session?.user?.email;
-      setUserEmail(userEmail ?? null);
+      const profile = await loadLocalProfile();
+      setUserEmail(profile?.email ?? null);
     }
     loadUser()
   }, [])

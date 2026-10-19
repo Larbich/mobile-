@@ -1,31 +1,21 @@
-/**
- * Chat Tab Screen ('/(tabs)/chat')
- *
- * Minimalist, clean conversational companion UI:
- * - Scrollable message thread
- * - Composio-powered assistant responses
- */
-
 import { Colors } from '@/constants/colors';
 import { showToast } from '@/context/ToastContext';
+import { generateAiText } from '@/services/aiProviders';
 import {
-  createScheduledAgentTask,
-  formatScheduleRule,
-} from '@/lib/scheduledTasks';
-import { getApiUrl } from '@/lib/services';
-import { supabase } from '@/lib/supabase';
-import { CreateNewThread, getThread, LoadMessages, saveMessage, updateMessage } from '@/services/chatHistory';
+  CreateNewThread,
+  getThread,
+  LoadMessages,
+  saveMessage,
+} from '@/services/chatHistory';
+import { loadLocalProfile } from '@/services/providerStorage';
 import { ChatMessage } from '@/types';
-import { ChatBrowserPreview } from '@/components/common/ChatBrowserPreview';
 import {
   Add01Icon,
-  Link02Icon,
   Mic01Icon,
   SentIcon,
 } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react-native';
 import { useLocalSearchParams } from 'expo-router';
-import * as WebBrowser from 'expo-web-browser';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -49,9 +39,7 @@ export default function ChatScreen() {
   const insets = useSafeAreaInsets();
   const [isSending, setIsSending] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
-  const [threadData, setThreadData] = useState<any>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
 
   const { thread_id } = useLocalSearchParams();
 
@@ -61,18 +49,13 @@ export default function ChatScreen() {
     }
   }, [thread_id]);
 
-  // Calculate header height offset for iOS KeyboardAvoidingView
   const headerOffset = Platform.OS === 'ios' ? insets.top + 98 : 0;
 
   useEffect(() => {
-    const loadUser = async () => {
-      const data = await supabase.auth.getSession();
-      const email = data?.data?.session?.user?.email;
-      const uid = data?.data?.session?.user?.id;
-      setUserEmail(email ?? null);
-      setUserId(uid ?? null);
-    };
-    loadUser();
+    (async () => {
+      const profile = await loadLocalProfile();
+      setUserEmail(profile?.email || null);
+    })();
   }, []);
 
   useEffect(() => {
@@ -80,38 +63,38 @@ export default function ChatScreen() {
   }, [messages]);
 
   useEffect(() => {
-    userEmail && GetThreadData();
-    threadId && userEmail && getChatHistory();
+    if (!userEmail) return;
+    if (!threadId) {
+      void loadMainThread();
+      return;
+    }
+    void getChatHistory();
   }, [threadId, userEmail]);
 
+  const loadMainThread = async () => {
+    let thread = await getThread('', userEmail || '');
+    if (!thread) {
+      thread = await CreateNewThread(userEmail || '', 'main', 'Main Chat');
+    }
+    setThreadId(thread.id);
+  };
+
   const getChatHistory = async () => {
-    const messages = await LoadMessages(threadId ?? '');
-    const MappedMessages = messages?.map((msg: any) => ({
+    if (!threadId) return;
+    const history = await LoadMessages(threadId);
+    const mapped = history.map((msg: any) => ({
       id: msg.id,
       sender: msg.role === 'user' ? 'user' : 'agent',
       text: msg.content,
-      timestamp: new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      scheduleConfirmation: msg.metadata?.scheduleConfirmation,
-      scheduleStatus: msg.metadata?.scheduleStatus,
-      scheduledTaskId: msg.metadata?.scheduledTaskId,
-      scheduleError: msg.metadata?.scheduleError,
+      timestamp: new Date(msg.created_at).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
     })) as ChatMessage[];
 
-    setMessages(MappedMessages ?? []);
+    setMessages(mapped);
   };
 
-  const GetThreadData = async () => {
-    if (!threadId) {
-      let Thread = await getThread(threadId ?? '', userEmail ?? '');
-      if (!Thread) {
-        Thread = await CreateNewThread(userEmail ?? '', 'main', 'Main Chat');
-      }
-      setThreadData(Thread);
-      setThreadId(Thread?.id ?? null);
-    }
-  };
-
-  // Scroll to bottom when keyboard appears
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const sub = Keyboard.addListener(showEvent, () => {
@@ -124,8 +107,9 @@ export default function ChatScreen() {
 
   const handleSend = async () => {
     const text = inputText.trim();
-    if (!text) return;
+    if (!text || !threadId) return;
 
+    const currentEmail = userEmail || 'local@muse.ai';
     setIsSending(true);
 
     const userMsg: ChatMessage = {
@@ -141,150 +125,49 @@ export default function ChatScreen() {
     setMessages((prev) => [...prev, userMsg]);
     setInputText('');
 
-    await saveMessage(
-      userEmail ?? '',
-      threadId ?? '',
-      'user',
-      text,
-      {}
-    );
+    await saveMessage(currentEmail, threadId, 'user', text, {});
 
     const agentMessageId = `msg-${Date.now() + 1}`;
 
-    try {
-      const ApiUrl = getApiUrl('/chat');
-
-      const response = await fetch(ApiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messages: [...messages, userMsg],
-          userId,
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: agentMessageId,
+        sender: 'agent',
+        text: 'Thinking...',
+        timestamp: new Date().toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
         }),
-      });
+      },
+    ]);
 
-      if (!response.ok || !response.body) {
-        throw new Error('Failed to connect to agent');
-      }
+    try {
+      const providerMessages = [...messages, userMsg].map((message) => ({
+        role: message.sender === 'agent' ? 'assistant' : 'user',
+        content: message.text,
+      })) as Array<{ role: 'assistant' | 'user'; content: string }>;
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
+      const output = await generateAiText(providerMessages);
 
-      let buffer = '';
-
-      // Add placeholder message immediately
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: agentMessageId,
-          sender: 'agent',
-          text: 'Thinking...',
-          timestamp: new Date().toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-          }),
-        },
-      ]);
-
-      while (true) {
-        const { value, done } = await reader.read();
-
-        if (done) break;
-
-        buffer += decoder.decode(value, {
-          stream: true,
-        });
-
-        const lines = buffer.split('\n');
-
-        // Keep unfinished line
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-
-          const data = JSON.parse(line);
-
-          if (data.type === 'browser') {
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === agentMessageId
-                  ? {
-                      ...msg,
-                      browserPreview: data.browser,
-                    }
-                  : msg
-              )
-            );
-          }
-
-          if (data.type === 'final') {
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === agentMessageId
-                  ? {
-                      ...msg,
-                      text:
-                        data.output ??
-                        'No Response from AI agent, Try Again',
-                      connectCta: data.connectCta || undefined,
-                      browserPreview: data.browserPreview || msg.browserPreview,
-                    }
-                  : msg
-              )
-            );
-
-            await saveMessage(
-              userEmail ?? '',
-              threadId ?? '',
-              'assistant',
-              data.output ?? 'No Response from AI agent, Try Again',
-              {}
-            );
-          }
-
-          if (data.type === 'schedule_confirmation') {
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === agentMessageId
-                  ? {
-                      ...msg,
-                      text: data.output ?? 'Schedule this task?',
-                      scheduleConfirmation: data.scheduleConfirmation,
-                      scheduleStatus: 'pending',
-                    }
-                  : msg
-              )
-            );
-
-            const savedScheduleMessage = await saveMessage(
-              userEmail ?? '',
-              threadId ?? '',
-              'assistant',
-              data.output ?? 'Schedule this task?',
-              {
-                scheduleConfirmation: data.scheduleConfirmation,
-                scheduleStatus: 'pending',
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === agentMessageId
+            ? {
+                ...msg,
+                text: output || 'No response.',
               }
-            );
+            : msg
+        )
+      );
 
-            if (savedScheduleMessage?.id) {
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === agentMessageId ? { ...msg, id: savedScheduleMessage.id } : msg
-                )
-              );
-            }
-          }
-
-          if (data.type === 'error') {
-            throw new Error(data.message);
-          }
-        }
-      }
+      await saveMessage(
+        currentEmail,
+        threadId,
+        'assistant',
+        output || 'No response.',
+        {}
+      );
     } catch (error) {
       console.error('Error sending message:', error);
       const errorMessage =
@@ -307,118 +190,12 @@ export default function ChatScreen() {
     }
   };
 
-  const handleOpenConnectLink = async (connectUrl: string, toolName: string) => {
-    try {
-      showToast(`Opening ${toolName} connection...`);
-      if (Platform.OS === 'web') {
-        window.open(connectUrl, '_blank');
-      } else {
-        await WebBrowser.openAuthSessionAsync(connectUrl);
-      }
-    } catch (error: any) {
-      showToast(error?.message || `Could not open ${toolName} connection`);
-    }
-  };
-
-  const handleConfirmSchedule = async (messageId: string) => {
-    const message = messages.find((msg) => msg.id === messageId);
-    if (!message?.scheduleConfirmation) return;
-
-    if (!userId) {
-      showToast('Please sign in before creating a schedule.');
-      return;
-    }
-
-    setMessages((prev) =>
-      prev.map((msg) =>
-        msg.id === messageId
-          ? { ...msg, scheduleStatus: 'saving', scheduleError: undefined }
-          : msg
-      )
-    );
-
-    try {
-      const task = await createScheduledAgentTask(userId, message.scheduleConfirmation, {
-        sourceThreadId: threadId,
-      });
-
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === messageId
-            ? {
-                ...msg,
-                text: 'Scheduled.',
-                scheduleStatus: 'confirmed',
-                scheduledTaskId: task.id,
-              }
-            : msg
-        )
-      );
-
-      await updateMessage(messageId, 'Scheduled.', {
-        scheduleConfirmation: message.scheduleConfirmation,
-        scheduleStatus: 'confirmed',
-        scheduledTaskId: task.id,
-      });
-
-      showToast('Schedule created');
-    } catch (error) {
-      console.error('Failed to create schedule:', error);
-      const errorMessage = getScheduleCreateErrorMessage(error);
-
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === messageId
-            ? {
-                ...msg,
-                scheduleStatus: 'failed',
-                scheduleError: errorMessage,
-              }
-            : msg
-        )
-      );
-
-      showToast(errorMessage);
-    }
-  };
-
-  const handleCancelSchedule = (messageId: string) => {
-    const message = messages.find((msg) => msg.id === messageId);
-
-    setMessages((prev) =>
-      prev.map((msg) =>
-        msg.id === messageId
-          ? { ...msg, text: 'Schedule cancelled.', scheduleStatus: 'cancelled' }
-          : msg
-      )
-    );
-
-    if (message?.scheduleConfirmation) {
-      updateMessage(messageId, 'Schedule cancelled.', {
-        scheduleConfirmation: message.scheduleConfirmation,
-        scheduleStatus: 'cancelled',
-      }).catch((error) => {
-        console.error('Failed to persist schedule cancellation:', error);
-      });
-    }
-  };
-
-  const handleEditSchedule = (messageId: string) => {
-    const message = messages.find((msg) => msg.id === messageId);
-    if (!message?.scheduleConfirmation) return;
-
-    setInputText(message.scheduleConfirmation.originalPrompt);
-    handleCancelSchedule(messageId);
-    showToast('Edit the request, then send it again.');
-  };
-
   return (
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={headerOffset}>
       <View style={styles.content}>
-        {/* Scrollable Messages Thread */}
         <ScrollView
           ref={scrollViewRef}
           style={styles.scrollArea}
@@ -428,14 +205,12 @@ export default function ChatScreen() {
           showsVerticalScrollIndicator={false}>
           <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
             <View style={styles.scrollInner}>
-              {/* Centered Date Badge */}
               <View style={styles.dateBadgeContainer}>
                 <View style={styles.dateBadge}>
                   <Text style={styles.dateBadgeText}>Today</Text>
                 </View>
               </View>
 
-              {/* Messages */}
               {messages.map((msg) => {
                 const isUser = msg.sender === 'user';
                 return (
@@ -459,107 +234,6 @@ export default function ChatScreen() {
                         ]}>
                         {msg.text}
                       </Text>
-
-                      {!isUser && msg.connectCta ? (
-                        <View style={styles.connectCard}>
-                          <View style={styles.connectIcon}>
-                            <HugeiconsIcon
-                              icon={Link02Icon}
-                              size={20}
-                              color={Colors.primary}
-                              strokeWidth={2}
-                            />
-                          </View>
-                          <View style={styles.connectBody}>
-                            <Text style={styles.connectTitle}>
-                              Connect {msg.connectCta.toolName}
-                            </Text>
-                            <Text style={styles.connectSubtitle}>
-                              Complete authorization, then send done.
-                            </Text>
-                          </View>
-                          <TouchableOpacity
-                            style={styles.connectButton}
-                            onPress={() =>
-                              handleOpenConnectLink(
-                                msg.connectCta!.connectUrl,
-                                msg.connectCta!.toolName
-                              )
-                            }
-                            activeOpacity={0.8}>
-                            <Text style={styles.connectButtonText}>Connect</Text>
-                          </TouchableOpacity>
-                        </View>
-                      ) : null}
-
-                      {!isUser && msg.browserPreview ? (
-                        <ChatBrowserPreview browserPreview={msg.browserPreview} />
-                      ) : null}
-
-                      {!isUser && msg.scheduleConfirmation ? (
-                        <View style={styles.scheduleCard}>
-                          <Text style={styles.scheduleTitle}>Schedule this task?</Text>
-                          <View style={styles.scheduleDetailRow}>
-                            <Text style={styles.scheduleLabel}>Task</Text>
-                            <Text style={styles.scheduleValue}>
-                              {msg.scheduleConfirmation.title}
-                            </Text>
-                          </View>
-                          <View style={styles.scheduleDetailRow}>
-                            <Text style={styles.scheduleLabel}>When</Text>
-                            <Text style={styles.scheduleValue}>
-                              {formatScheduleRule(msg.scheduleConfirmation.scheduleRule)}
-                            </Text>
-                          </View>
-                          <View style={styles.scheduleDetailRow}>
-                            <Text style={styles.scheduleLabel}>Delivery</Text>
-                            <Text style={styles.scheduleValue}>
-                              {formatDeliveryLabel(msg.scheduleConfirmation.delivery)}
-                            </Text>
-                          </View>
-                          <Text style={styles.scheduleSummary}>
-                            {msg.scheduleConfirmation.summary}
-                          </Text>
-
-                          {msg.scheduleError ? (
-                            <Text style={styles.scheduleError}>{msg.scheduleError}</Text>
-                          ) : null}
-
-                          <View style={styles.scheduleActions}>
-                            <TouchableOpacity
-                              style={[
-                                styles.scheduleButton,
-                                styles.schedulePrimaryButton,
-                                msg.scheduleStatus !== 'pending' && styles.scheduleButtonDisabled,
-                              ]}
-                              disabled={msg.scheduleStatus !== 'pending'}
-                              onPress={() => handleConfirmSchedule(msg.id)}
-                              activeOpacity={0.8}>
-                              <Text style={styles.schedulePrimaryButtonText}>
-                                {msg.scheduleStatus === 'saving'
-                                  ? 'Saving...'
-                                  : msg.scheduleStatus === 'confirmed'
-                                    ? 'Confirmed'
-                                    : 'Confirm'}
-                              </Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={styles.scheduleButton}
-                              disabled={msg.scheduleStatus !== 'pending'}
-                              onPress={() => handleEditSchedule(msg.id)}
-                              activeOpacity={0.8}>
-                              <Text style={styles.scheduleButtonText}>Edit</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={styles.scheduleButton}
-                              disabled={msg.scheduleStatus !== 'pending'}
-                              onPress={() => handleCancelSchedule(msg.id)}
-                              activeOpacity={0.8}>
-                              <Text style={styles.scheduleButtonText}>Cancel</Text>
-                            </TouchableOpacity>
-                          </View>
-                        </View>
-                      ) : null}
                     </View>
                   </TouchableOpacity>
                 );
@@ -580,10 +254,8 @@ export default function ChatScreen() {
           </TouchableWithoutFeedback>
         </ScrollView>
 
-        {/* Floating Input Pill */}
         <View style={styles.inputWrapper}>
           <View style={styles.inputBar}>
-            {/* Plus Attach Button */}
             <TouchableOpacity
               style={styles.circleBtn}
               onPress={() => showToast('Attach file')}
@@ -596,7 +268,6 @@ export default function ChatScreen() {
               />
             </TouchableOpacity>
 
-            {/* Prompt Text Input */}
             <TextInput
               style={styles.textInput}
               value={inputText}
@@ -606,13 +277,12 @@ export default function ChatScreen() {
                   scrollViewRef.current?.scrollToEnd({ animated: true });
                 }, 100);
               }}
-              placeholder="Ask Cooper to read emails, send Slack msgs, or schedule meetings..."
+              placeholder="Ask Cooper anything..."
               placeholderTextColor={Colors.iconMuted}
               returnKeyType="send"
               onSubmitEditing={handleSend}
             />
 
-            {/* Right Action: Voice or Send */}
             {inputText.trim().length > 0 ? (
               <TouchableOpacity
                 style={[styles.circleBtn, styles.sendBtn]}
@@ -643,39 +313,6 @@ export default function ChatScreen() {
       </View>
     </KeyboardAvoidingView>
   );
-}
-
-function formatDeliveryLabel(delivery?: string | null) {
-  return (delivery || 'chat')
-    .split(/[_-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ') || 'Chat';
-}
-
-function getScheduleCreateErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  if (error && typeof error === 'object') {
-    const record = error as {
-      message?: unknown;
-      details?: unknown;
-      hint?: unknown;
-      code?: unknown;
-    };
-    return [
-      typeof record.message === 'string' ? record.message : 'Could not create schedule',
-      typeof record.details === 'string' ? record.details : null,
-      typeof record.hint === 'string' ? `Hint: ${record.hint}` : null,
-      typeof record.code === 'string' ? `Code: ${record.code}` : null,
-    ]
-      .filter(Boolean)
-      .join(' ');
-  }
-
-  return 'Could not create schedule';
 }
 
 const styles = StyleSheet.create({
@@ -784,125 +421,5 @@ const styles = StyleSheet.create({
     color: Colors.iconDark,
     paddingHorizontal: 10,
     paddingVertical: Platform.OS === 'ios' ? 8 : 4,
-  },
-  connectCard: {
-    marginTop: 12,
-    padding: 12,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.white,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  connectIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.primarySubtle,
-    marginRight: 10,
-  },
-  connectBody: {
-    flex: 1,
-    marginRight: 10,
-  },
-  connectTitle: {
-    fontSize: 13.5,
-    fontWeight: '700',
-    color: Colors.iconDark,
-  },
-  connectSubtitle: {
-    fontSize: 12,
-    color: Colors.textSecondary,
-    marginTop: 2,
-  },
-  connectButton: {
-    backgroundColor: Colors.primary,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  connectButtonText: {
-    color: Colors.white,
-    fontSize: 12.5,
-    fontWeight: '700',
-  },
-  scheduleCard: {
-    marginTop: 12,
-    padding: 12,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.white,
-  },
-  scheduleTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: Colors.iconDark,
-    marginBottom: 10,
-  },
-  scheduleDetailRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 8,
-  },
-  scheduleLabel: {
-    width: 64,
-    fontSize: 12,
-    fontWeight: '700',
-    color: Colors.textSecondary,
-  },
-  scheduleValue: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: '600',
-    color: Colors.iconDark,
-  },
-  scheduleSummary: {
-    fontSize: 12.5,
-    lineHeight: 18,
-    color: Colors.textSecondary,
-    marginTop: 2,
-  },
-  scheduleError: {
-    fontSize: 12.5,
-    lineHeight: 18,
-    color: Colors.error,
-    marginTop: 8,
-  },
-  scheduleActions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 12,
-  },
-  scheduleButton: {
-    minHeight: 34,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.white,
-  },
-  schedulePrimaryButton: {
-    borderColor: Colors.primary,
-    backgroundColor: Colors.primary,
-  },
-  scheduleButtonDisabled: {
-    opacity: 0.65,
-  },
-  scheduleButtonText: {
-    fontSize: 12.5,
-    fontWeight: '700',
-    color: Colors.iconDark,
-  },
-  schedulePrimaryButtonText: {
-    fontSize: 12.5,
-    fontWeight: '800',
-    color: Colors.white,
   },
 });
