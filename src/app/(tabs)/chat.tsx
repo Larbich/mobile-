@@ -33,21 +33,16 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function ChatScreen() {
+  const { thread_id } = useLocalSearchParams();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const scrollViewRef = useRef<ScrollView>(null);
   const insets = useSafeAreaInsets();
   const [isSending, setIsSending] = useState(false);
-  const [threadId, setThreadId] = useState<string | null>(null);
+  const [threadId, setThreadId] = useState<string | null>(
+    typeof thread_id === 'string' ? thread_id : null
+  );
   const [userEmail, setUserEmail] = useState<string | null>(null);
-
-  const { thread_id } = useLocalSearchParams();
-
-  useEffect(() => {
-    if (thread_id) {
-      setThreadId(thread_id as string);
-    }
-  }, [thread_id]);
 
   const headerOffset = Platform.OS === 'ios' ? insets.top + 98 : 0;
 
@@ -64,36 +59,42 @@ export default function ChatScreen() {
 
   useEffect(() => {
     if (!userEmail) return;
-    if (!threadId) {
-      void loadMainThread();
-      return;
-    }
-    void getChatHistory();
+    let isDisposed = false;
+
+    const syncThreadAndMessages = async () => {
+      if (!threadId) {
+        let thread = await getThread('', userEmail || '');
+        if (!thread) {
+          thread = await CreateNewThread(userEmail || '', 'main', 'Main Chat');
+        }
+        if (!isDisposed) {
+          setThreadId(thread.id);
+        }
+        return;
+      }
+
+      const history = await LoadMessages(threadId);
+      const mapped = history.map((msg: any) => ({
+        id: msg.id,
+        sender: msg.role === 'user' ? 'user' : 'agent',
+        text: msg.content,
+        timestamp: new Date(msg.created_at).toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+      })) as ChatMessage[];
+
+      if (!isDisposed) {
+        setMessages(mapped);
+      }
+    };
+
+    void syncThreadAndMessages();
+
+    return () => {
+      isDisposed = true;
+    };
   }, [threadId, userEmail]);
-
-  const loadMainThread = async () => {
-    let thread = await getThread('', userEmail || '');
-    if (!thread) {
-      thread = await CreateNewThread(userEmail || '', 'main', 'Main Chat');
-    }
-    setThreadId(thread.id);
-  };
-
-  const getChatHistory = async () => {
-    if (!threadId) return;
-    const history = await LoadMessages(threadId);
-    const mapped = history.map((msg: any) => ({
-      id: msg.id,
-      sender: msg.role === 'user' ? 'user' : 'agent',
-      text: msg.content,
-      timestamp: new Date(msg.created_at).toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
-    })) as ChatMessage[];
-
-    setMessages(mapped);
-  };
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
