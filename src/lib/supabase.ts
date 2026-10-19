@@ -1,31 +1,29 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_KEY || '';
-
 /**
- * Check if Supabase environment configuration is set up.
+ * Deprecated in local-first mode.
+ * Kept as a compatibility shim for legacy imports.
  */
-export const isSupabaseConfigured = Boolean(
-  supabaseUrl &&
-    supabaseAnonKey &&
-    supabaseUrl !== 'https://your-supabase-project.supabase.co' &&
-    !supabaseUrl.includes('placeholder')
-);
 
-/**
- * Single Supabase client instance for interacting with database and authentication.
- */
-export const supabase = createClient(
-  supabaseUrl || 'https://placeholder.supabase.co',
-  supabaseAnonKey || 'placeholder-key',
-  {
-    auth: {
-      storage: AsyncStorage,
-      persistSession: true,
-      autoRefreshToken: true,
-      detectSessionInUrl: false,
-    },
-  }
-);
+export const isSupabaseConfigured = false;
+
+function unsupported() {
+  throw new Error('Supabase is disabled in local-first mode.');
+}
+
+export const supabase: any = {
+  auth: {
+    getSession: async () => ({ data: { session: null }, error: null }),
+    getUser: async () => ({ data: { user: null }, error: null }),
+    signInWithOAuth: async () => unsupported(),
+    setSession: async () => unsupported(),
+  },
+  from: () => ({
+    select: () => unsupported(),
+    insert: () => unsupported(),
+    update: () => unsupported(),
+    delete: () => unsupported(),
+    upsert: () => unsupported(),
+  }),
+  functions: {
+    invoke: async () => unsupported(),
+  },
+};

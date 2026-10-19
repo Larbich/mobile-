@@ -1,145 +1,191 @@
-import { supabase } from "@/lib/supabase";
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export type ChatThreadType = 'main' | 'side';
 export type ChatMessageRole = 'user' | 'assistant';
 
-export const CreateNewThread = async (userEmail: string, type: ChatThreadType, title?: string) => {
-    const { data, error } = await supabase
-        .from('chat_threads')
-        .insert({
+type LocalChatThread = {
+  id: string;
+  user_email: string;
+  type: ChatThreadType;
+  title: string;
+  has_unread_updates?: boolean;
+  created_at: string;
+  updated_at: string;
+};
 
-            user_email: userEmail,
-            type: type,
-            title: title
-        })
-        .select()
-        .single();
+type LocalChatMessage = {
+  id: string;
+  user_email: string;
+  thread_id: string;
+  role: ChatMessageRole;
+  content: string;
+  metadata: any;
+  created_at: string;
+};
 
-    if (error) throw error
+const THREADS_KEY = 'muse.chat.threads.v1';
+const MESSAGES_KEY = 'muse.chat.messages.v1';
 
-    return data;
+async function loadThreads(): Promise<LocalChatThread[]> {
+  const raw = await AsyncStorage.getItem(THREADS_KEY);
+  if (!raw) return [];
+
+  try {
+    return JSON.parse(raw) as LocalChatThread[];
+  } catch {
+    return [];
+  }
 }
 
+async function saveThreads(threads: LocalChatThread[]) {
+  await AsyncStorage.setItem(THREADS_KEY, JSON.stringify(threads));
+}
+
+async function loadMessages(): Promise<LocalChatMessage[]> {
+  const raw = await AsyncStorage.getItem(MESSAGES_KEY);
+  if (!raw) return [];
+
+  try {
+    return JSON.parse(raw) as LocalChatMessage[];
+  } catch {
+    return [];
+  }
+}
+
+async function saveMessages(messages: LocalChatMessage[]) {
+  await AsyncStorage.setItem(MESSAGES_KEY, JSON.stringify(messages));
+}
+
+function makeId(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export const CreateNewThread = async (
+  userEmail: string,
+  type: ChatThreadType,
+  title?: string
+) => {
+  const now = new Date().toISOString();
+  const threads = await loadThreads();
+
+  const thread: LocalChatThread = {
+    id: makeId('thread'),
+    user_email: userEmail,
+    type,
+    title: title || (type === 'main' ? 'Main Chat' : 'New Side Chat'),
+    has_unread_updates: false,
+    created_at: now,
+    updated_at: now,
+  };
+
+  await saveThreads([thread, ...threads]);
+  return thread;
+};
 
 export const getThread = async (threadId: string, userEmail?: string) => {
-    console.log("getThread", threadId, userEmail)
-    if (!threadId) {
-        let { data, error } = await supabase
-            .from('chat_threads')
-            .select('*')
-            .eq('type', 'main')
-            .eq('user_email', userEmail)
-            .maybeSingle();
+  const threads = await loadThreads();
 
-        if (error) throw error;
-        return data;
-    }
-    let { data, error } = await supabase
-        .from('chat_threads')
-        .select('*')
-        .eq('id', threadId)
-        .maybeSingle();
+  if (!threadId) {
+    return (
+      threads.find(
+        (thread) => thread.type === 'main' && thread.user_email === userEmail
+      ) || null
+    );
+  }
 
-    if (error) throw error;
-    return data;
-
-}
+  return threads.find((thread) => thread.id === threadId) || null;
+};
 
 export const GetLatestThread = async (userEmail: string) => {
+  const threads = await loadThreads();
+  return (
+    threads
+      .filter((thread) => thread.user_email === userEmail)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))[0] || null
+  );
+};
 
-    let { data, error } = await supabase
-        .from('chat_threads')
-        .select('*')
-        .eq('user_email', userEmail)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+export const saveMessage = async (
+  userEmail: string,
+  threadId: string,
+  role: ChatMessageRole,
+  content: string,
+  metadata: any
+) => {
+  const messages = await loadMessages();
+  const threads = await loadThreads();
+  const now = new Date().toISOString();
 
-    if (error) throw error;
-    return data;
+  const message: LocalChatMessage = {
+    id: makeId('msg'),
+    user_email: userEmail,
+    thread_id: threadId,
+    role,
+    content,
+    metadata,
+    created_at: now,
+  };
 
-}
+  await saveMessages([...messages, message]);
 
+  const updatedThreads = threads.map((thread) =>
+    thread.id === threadId
+      ? {
+          ...thread,
+          updated_at: now,
+          title:
+            role === 'assistant' && content
+              ? content.slice(0, 40)
+              : thread.title,
+        }
+      : thread
+  );
 
-export const saveMessage = async (userEmail: string, threadId: string, role: ChatMessageRole, content: string, metadata: any) => {
-    console.log("saveMessage", userEmail, threadId, role, content, metadata)
-    const { data, error } = await supabase
-        .from('chat_messages')
-        .insert({
-            user_email: userEmail,
-            thread_id: threadId,
-            role: role,
-            content: content,
-            metadata: metadata
-        })
-        .select()
-        .single();
+  await saveThreads(updatedThreads);
+  return message;
+};
 
-    if (error) throw error;
+export const updateMessage = async (
+  messageId: string,
+  content: string,
+  metadata: any
+) => {
+  const messages = await loadMessages();
+  let updated: LocalChatMessage | null = null;
 
-    await supabase.from('chat_threads')
-        .update({
-            updated_at: new Date().toISOString()
-        }).eq('id', threadId);
+  const next = messages.map((message) => {
+    if (message.id !== messageId) return message;
+    updated = { ...message, content, metadata };
+    return updated;
+  });
 
-    if (role == 'assistant') {
-        await supabase.from('chat_threads')
-            .update({
-                title: content?.slice(0, 40)
-            }).eq('id', threadId)
-
-    }
-
-    return data;
-}
-
-export const updateMessage = async (messageId: string, content: string, metadata: any) => {
-    const { data, error } = await supabase
-        .from('chat_messages')
-        .update({
-            content,
-            metadata
-        })
-        .eq('id', messageId)
-        .select()
-        .single();
-
-    if (error) throw error;
-    return data;
-}
-
+  await saveMessages(next);
+  return updated;
+};
 
 export const LoadMessages = async (threadid: string) => {
-    const { data, error } = await supabase.from('chat_messages')
-        .select('*')
-        .eq('thread_id', threadid)
-        .order('created_at', { ascending: true });
-
-    return data;
-}
-
-
+  const messages = await loadMessages();
+  return messages
+    .filter((message) => message.thread_id === threadid)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+};
 
 export const GetAllUserThreads = async (userEmail: string) => {
-    const { data, error } = await supabase.from('chat_threads')
-        .select('*')
-        .eq('user_email', userEmail)
-        .order('created_at', { ascending: false });
-
-    if (error) throw error;
-    return data;
-}
+  const threads = await loadThreads();
+  return threads
+    .filter((thread) => thread.user_email === userEmail)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+};
 
 export const DeleteThread = async (threadId: string) => {
+  const messages = await loadMessages();
+  const threads = await loadThreads();
 
-    const { data: messagesData, error: messagesError } = await supabase.from('chat_messages')
-        .delete()
-        .eq('thread_id', threadId);
+  const nextMessages = messages.filter((message) => message.thread_id !== threadId);
+  const nextThreads = threads.filter((thread) => thread.id !== threadId);
 
-    const { data, error } = await supabase.from('chat_threads')
-        .delete()
-        .eq('id', threadId);
+  await saveMessages(nextMessages);
+  await saveThreads(nextThreads);
 
-    if (error) throw error;
-    return data;
-}
+  return { success: true };
+};

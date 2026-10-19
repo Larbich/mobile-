@@ -11,8 +11,8 @@
 import { Colors } from '@/constants/colors';
 import { SIDE_CHATS } from '@/constants/dummyData';
 import { showToast } from '@/context/ToastContext';
-import { supabase } from '@/lib/supabase';
 import { CreateNewThread, DeleteThread, GetAllUserThreads } from '@/services/chatHistory';
+import { loadLocalProfile } from '@/services/providerStorage';
 import { SideChatItem } from '@/types';
 import {
   ArrowRight01Icon,
@@ -82,15 +82,55 @@ export const SidebarDrawer: React.FC<SidebarDrawerProps> = ({
 
   useEffect(() => {
     const loadUser = async () => {
-      const data = await supabase.auth.getSession();
-      const userEmail = data?.data?.session?.user?.email;
-      setUserEmail(userEmail ?? null);
+      const profile = await loadLocalProfile();
+      setUserEmail(profile?.email ?? null);
     }
     loadUser()
   }, [])
 
+  const GetAllUserChatThreads = async () => {
+    const data = await GetAllUserThreads(userEmail ?? '');
+    console.log(data);
+
+    const mainChat = data.find((thread: any) => thread.type === 'main');
+    const sideChats: SideChatItem[] = data
+      ?.filter((thread: any) => thread.type === 'side')
+      ?.map((thread: any) => ({
+        id: thread.id,
+        title: thread.title,
+        hasUnreadDot: thread.has_unread_updates ?? false
+      })) as SideChatItem[];
+    console.log(sideChats)
+    setSideChatList(sideChats)
+    setMainChatThread(mainChat ?? null)
+  }
+
   useEffect(() => {
-    userEmail && GetAllUserChatThreads();
+    if (!userEmail) return;
+
+    let isDisposed = false;
+    const syncThreads = async () => {
+      const data = await GetAllUserThreads(userEmail);
+      const mainChat = data.find((thread: any) => thread.type === 'main');
+      const sideChats: SideChatItem[] = data
+        ?.filter((thread: any) => thread.type === 'side')
+        ?.map((thread: any) => ({
+          id: thread.id,
+          title: thread.title,
+          hasUnreadDot: thread.has_unread_updates ?? false
+        })) as SideChatItem[];
+
+      if (!isDisposed) {
+        setSideChatList(sideChats)
+        setMainChatThread(mainChat ?? null)
+      }
+    };
+
+    void syncThreads();
+
+    return () => {
+      isDisposed = true;
+    };
   }, [userEmail])
 
 
@@ -111,23 +151,6 @@ export const SidebarDrawer: React.FC<SidebarDrawerProps> = ({
     GetAllUserChatThreads();
     onClose();
     // onNewChat();
-  }
-
-  const GetAllUserChatThreads = async () => {
-    const data = await GetAllUserThreads(userEmail ?? '');
-    console.log(data);
-
-    const mainChat = data.find((thread: any) => thread.type === 'main');
-    const sideChats: SideChatItem[] = data
-      ?.filter((thread: any) => thread.type === 'side')
-      ?.map((thread: any) => ({
-        id: thread.id,
-        title: thread.title,
-        hasUnreadDot: thread.has_unread_updates ?? false
-      })) as SideChatItem[];
-    console.log(sideChats)
-    setSideChatList(sideChats)
-    setMainChatThread(mainChat)
   }
 
   const deleteThread = async (threadId: string) => {
@@ -203,9 +226,8 @@ export const SidebarDrawer: React.FC<SidebarDrawerProps> = ({
 
             {/* Side Chats List */}
             {sideChatList.map((chat, index) => (
-              <View>
+              <View key={chat.id || String(index)}>
                 <TouchableOpacity
-                  key={index}
                   style={styles.chatRow}
                   onPress={() => {
                     router.replace({

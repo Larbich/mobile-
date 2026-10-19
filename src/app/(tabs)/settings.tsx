@@ -1,260 +1,216 @@
-/**
- * Settings Tab Screen ('/(tabs)/settings')
- *
- * Clean settings & account management:
- * - Free Plan progress card
- * - Settings items (Connectors, Pricing, Notifications, Appearance, Help & Feedback, Sign Out)
- * - Simple on-click Toast triggers without complex modal logic
- */
-
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
   ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
   TouchableOpacity,
+  View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
-import { HugeiconsIcon } from '@hugeicons/react-native';
-import {
-  Grid02Icon,
-  Tag01Icon,
-  Notification01Icon,
-  PaintBrush01Icon,
-  ArrowRight01Icon,
-  HelpCircleIcon,
-  Logout01Icon,
-} from '@hugeicons/core-free-icons';
 import { Colors } from '@/constants/colors';
-import { SETTINGS_PLAN_DATA } from '@/constants/dummyData';
 import { showToast } from '@/context/ToastContext';
+import {
+  AiSettings,
+  DEFAULT_AI_SETTINGS,
+  ProviderId,
+  PROVIDER_OPTIONS,
+  loadAiSettings,
+  saveAiSettings,
+} from '@/services/providerStorage';
 
 export default function SettingsScreen() {
-  const router = useRouter();
+  const [settings, setSettings] = useState<AiSettings>(DEFAULT_AI_SETTINGS);
+  const [loading, setLoading] = useState(true);
+  const [providerListOpen, setProviderListOpen] = useState(false);
+
+  const activeProvider = settings.activeProvider;
+  const activeConfig = settings.providers[activeProvider];
+  const activeLabel = useMemo(
+    () =>
+      PROVIDER_OPTIONS.find((p) => p.id === activeProvider)?.label ||
+      activeProvider,
+    [activeProvider]
+  );
+
+  useEffect(() => {
+    (async () => {
+      const loaded = await loadAiSettings();
+      setSettings(loaded);
+      setLoading(false);
+    })();
+  }, []);
+
+  const updateProviderField = (
+    field: 'apiKey' | 'baseUrl' | 'model',
+    value: string
+  ) => {
+    setSettings((prev) => ({
+      ...prev,
+      providers: {
+        ...prev.providers,
+        [prev.activeProvider]: {
+          ...prev.providers[prev.activeProvider],
+          [field]: value,
+        },
+      },
+    }));
+  };
+
+  const selectProvider = (provider: ProviderId) => {
+    setSettings((prev) => ({ ...prev, activeProvider: provider }));
+    setProviderListOpen(false);
+  };
+
+  const onSave = async () => {
+    await saveAiSettings(settings);
+    showToast('API settings saved locally');
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.pageTitle}>Loading settings...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
       <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}>
-        {/* Title */}
-        <View style={styles.headerRow}>
-          <Text style={styles.pageTitle}>Settings</Text>
-        </View>
+        <Text style={styles.pageTitle}>API Settings</Text>
 
-        {/* 1. Free Plan Card */}
-        <View style={styles.planCard}>
-          <View style={styles.planHeaderRow}>
-            <Text style={styles.planTitle}>{SETTINGS_PLAN_DATA.planName}</Text>
-            <Text style={styles.planUsageText}>{SETTINGS_PLAN_DATA.percentUsed}% used</Text>
-          </View>
-          <Text style={styles.planResetText}>{SETTINGS_PLAN_DATA.resetText}</Text>
-          <View style={styles.progressBarTrack}>
-            <View
-              style={[
-                styles.progressBarFill,
-                { width: `${SETTINGS_PLAN_DATA.percentUsed}%` },
-              ]}
-            />
-          </View>
+        <View style={styles.card}>
+          <Text style={styles.label}>Active Provider</Text>
           <TouchableOpacity
-            style={styles.upgradeBtn}
-            onPress={() => showToast('Upgrade to Pro')}
-            activeOpacity={0.7}>
-            <Text style={styles.upgradeBtnText}>Upgrade</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* 2. Primary Group: Tools & Connections & Pricing */}
-        <View style={styles.groupCard}>
-          <TouchableOpacity
-            style={styles.listItem}
-            onPress={() => router.push('/tools' as any)}
-            activeOpacity={0.65}>
-            <View style={styles.listIconCol}>
-              <HugeiconsIcon icon={Grid02Icon} size={22} color={Colors.iconDark} strokeWidth={2} />
-            </View>
-            <Text style={styles.listLabel}>Tools & Connections</Text>
-            <HugeiconsIcon icon={ArrowRight01Icon} size={20} color={Colors.iconMuted} strokeWidth={1.8} />
+            style={styles.selector}
+            onPress={() => setProviderListOpen((v) => !v)}>
+            <Text style={styles.selectorText}>{activeLabel}</Text>
           </TouchableOpacity>
 
-          <View style={styles.rowDivider} />
-
-          <TouchableOpacity
-            style={styles.listItem}
-            onPress={() => showToast('Pricing & Plans')}
-            activeOpacity={0.65}>
-            <View style={styles.listIconCol}>
-              <HugeiconsIcon icon={Tag01Icon} size={22} color={Colors.iconDark} strokeWidth={2} />
+          {providerListOpen && (
+            <View style={styles.dropdown}>
+              {PROVIDER_OPTIONS.map((p) => (
+                <TouchableOpacity
+                  key={p.id}
+                  style={styles.dropdownItem}
+                  onPress={() => selectProvider(p.id)}>
+                  <Text style={styles.dropdownText}>{p.label}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
-            <Text style={styles.listLabel}>Pricing</Text>
-            <HugeiconsIcon icon={ArrowRight01Icon} size={20} color={Colors.iconMuted} strokeWidth={1.8} />
-          </TouchableOpacity>
-        </View>
+          )}
 
-        {/* 3. Secondary Group: Preferences & Support */}
-        <View style={styles.groupCard}>
-          <TouchableOpacity
-            style={styles.listItem}
-            onPress={() => showToast('Notifications')}
-            activeOpacity={0.65}>
-            <View style={styles.listIconCol}>
-              <HugeiconsIcon icon={Notification01Icon} size={22} color={Colors.iconDark} strokeWidth={2} />
-            </View>
-            <Text style={styles.listLabel}>Notifications</Text>
-            <HugeiconsIcon icon={ArrowRight01Icon} size={20} color={Colors.iconMuted} strokeWidth={1.8} />
-          </TouchableOpacity>
+          <Text style={styles.label}>Model</Text>
+          <TextInput
+            value={activeConfig.model}
+            onChangeText={(v) => updateProviderField('model', v)}
+            style={styles.input}
+            placeholder="e.g. deepseek/deepseek-r1:free"
+            placeholderTextColor={Colors.iconMuted}
+          />
 
-          <View style={styles.rowDivider} />
+          <Text style={styles.label}>Base URL</Text>
+          <TextInput
+            value={activeConfig.baseUrl}
+            onChangeText={(v) => updateProviderField('baseUrl', v)}
+            style={styles.input}
+            autoCapitalize="none"
+            placeholder="e.g. http://192.168.1.12:11434"
+            placeholderTextColor={Colors.iconMuted}
+          />
 
-          <TouchableOpacity
-            style={styles.listItem}
-            onPress={() => showToast('Appearance')}
-            activeOpacity={0.65}>
-            <View style={styles.listIconCol}>
-              <HugeiconsIcon icon={PaintBrush01Icon} size={22} color={Colors.iconDark} strokeWidth={2} />
-            </View>
-            <Text style={styles.listLabel}>Appearance</Text>
-            <HugeiconsIcon icon={ArrowRight01Icon} size={20} color={Colors.iconMuted} strokeWidth={1.8} />
-          </TouchableOpacity>
+          <Text style={styles.label}>API Key</Text>
+          <TextInput
+            value={activeConfig.apiKey}
+            onChangeText={(v) => updateProviderField('apiKey', v)}
+            style={styles.input}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+            placeholder="Enter provider key"
+            placeholderTextColor={Colors.iconMuted}
+          />
 
-          <View style={styles.rowDivider} />
-
-          <TouchableOpacity
-            style={styles.listItem}
-            onPress={() => showToast('Help & Feedback')}
-            activeOpacity={0.65}>
-            <View style={styles.listIconCol}>
-              <HugeiconsIcon icon={HelpCircleIcon} size={22} color={Colors.iconDark} strokeWidth={2} />
-            </View>
-            <Text style={styles.listLabel}>Help & Feedback</Text>
-            <HugeiconsIcon icon={ArrowRight01Icon} size={20} color={Colors.iconMuted} strokeWidth={1.8} />
-          </TouchableOpacity>
-
-          <View style={styles.rowDivider} />
-
-          <TouchableOpacity
-            style={styles.listItem}
-            onPress={() => showToast('Signed Out')}
-            activeOpacity={0.65}>
-            <View style={styles.listIconCol}>
-              <HugeiconsIcon icon={Logout01Icon} size={22} color={Colors.error} strokeWidth={2} />
-            </View>
-            <Text style={[styles.listLabel, { color: Colors.error }]}>Sign Out</Text>
-            <HugeiconsIcon icon={ArrowRight01Icon} size={20} color={Colors.iconMuted} strokeWidth={1.8} />
+          <TouchableOpacity style={styles.saveButton} onPress={onSave}>
+            <Text style={styles.saveText}>Save</Text>
           </TouchableOpacity>
         </View>
-
-        <View style={{ height: 40 }} />
       </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  container: { flex: 1, backgroundColor: Colors.white },
+  center: {
     flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: Colors.white,
   },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingBottom: 24,
-  },
-  headerRow: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 16,
-  },
+  content: { padding: 20, paddingBottom: 40 },
   pageTitle: {
     fontSize: 28,
     fontWeight: '700',
     color: Colors.iconDark,
-    letterSpacing: -0.5,
+    marginBottom: 16,
   },
-  planCard: {
-    marginHorizontal: 20,
-    marginBottom: 20,
+  card: {
     backgroundColor: '#FAFAFB',
-    borderRadius: 20,
-    padding: 18,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: '#ECEEF0',
+    padding: 14,
   },
-  planHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  planTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: Colors.iconDark,
-    letterSpacing: -0.2,
-  },
-  planUsageText: {
+  label: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#0066FF',
-  },
-  planResetText: {
-    fontSize: 12.5,
-    color: '#707070',
-    marginBottom: 12,
-  },
-  progressBarTrack: {
-    height: 6,
-    backgroundColor: '#E6E8EA',
-    borderRadius: 3,
-    overflow: 'hidden',
-    marginBottom: 14,
-  },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: '#0066FF',
-    borderRadius: 3,
-  },
-  upgradeBtn: {
-    alignSelf: 'flex-start',
-  },
-  upgradeBtnText: {
-    fontSize: 13.5,
-    fontWeight: '700',
-    color: '#0066FF',
-  },
-  groupCard: {
-    marginHorizontal: 20,
-    marginBottom: 16,
-    backgroundColor: '#FAFAFB',
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#ECEEF0',
-    overflow: 'hidden',
-  },
-  listItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 15,
-    paddingHorizontal: 16,
-  },
-  listIconCol: {
-    width: 32,
-    alignItems: 'flex-start',
-  },
-  listLabel: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: '600',
     color: Colors.iconDark,
-    letterSpacing: -0.2,
+    marginTop: 10,
+    marginBottom: 8,
   },
-  rowDivider: {
-    height: 1,
-    backgroundColor: '#F0F0F2',
-    marginLeft: 48,
+  selector: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    backgroundColor: Colors.white,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
   },
+  selectorText: { color: Colors.iconDark, fontSize: 14, fontWeight: '600' },
+  dropdown: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    backgroundColor: Colors.white,
+    overflow: 'hidden',
+  },
+  dropdownItem: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  dropdownText: { color: Colors.iconDark, fontSize: 14 },
+  input: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    backgroundColor: Colors.white,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: Colors.iconDark,
+  },
+  saveButton: {
+    marginTop: 16,
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    alignItems: 'center',
+    paddingVertical: 12,
+  },
+  saveText: { color: Colors.white, fontWeight: '700', fontSize: 14 },
 });
