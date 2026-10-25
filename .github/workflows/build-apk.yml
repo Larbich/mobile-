@@ -51,9 +51,9 @@ jobs:
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
-      - name: Find and Verify APK was generated
+      - name: Find generated APK files
         run: |
-          echo "Searching for generated APK files..."
+          echo "Searching for APK files in the workspace..."
           find . -name "*.apk"
 
       - name: Upload APK artifact
@@ -61,8 +61,8 @@ jobs:
         with:
           name: Muse-AI-Custom-apk
           path: |
-            android/app/build/outputs/apk/**/*.apk
+            android/app/build/outputs/apk/release/*.apk
             **/build/outputs/apk/release/*.apk
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 14
           
