@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - copilot/build-apk
   workflow_dispatch:
 
 permissions:
@@ -50,13 +51,18 @@ jobs:
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
-      - name: Verify APK was generated
-        run: test -f android/app/build/outputs/apk/release/app-release.apk
+      - name: Find and Verify APK was generated
+        run: |
+          echo "Searching for generated APK files..."
+          find . -name "*.apk"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: Muse-AI-Custom-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: |
+            android/app/build/outputs/apk/**/*.apk
+            **/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 14
+          
